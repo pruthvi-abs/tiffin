@@ -1,0 +1,1099 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Cart;
+use App\Order;
+use App\Orderproduct;
+use App\User;
+use App\Photo;
+use App\Role;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Session;
+use Carbon\Carbon;
+use Mail;
+use Config;
+//use Srmklive\PayPal\Services\PayPal as PayPalClient;
+use Srmklive\PayPal\Services\ExpressCheckout;
+use Srmklive\PayPal\Services\AdaptivePayments;
+
+class OrdersController extends Controller
+{
+    public function index(){
+        $data['pagetitle']="Order Review";
+        $session_id=Session::get('session_id');
+        $cart_datas=Cart::where('session_id',$session_id)->get();
+        $cart_count=Cart::where('session_id',$session_id)->count();
+        if($cart_count==0){
+          return redirect('/viewcart');
+        }else{
+          $total_price=0;
+          foreach ($cart_datas as $cart_data){
+              $total_price+=$cart_data->price*$cart_data->quantity;
+          }
+          $data['cart_datas']=$cart_datas;
+          $data['total_price']=$total_price;
+          //$data['shipping_address']=DB::table('delivery_addresses')->where('users_id',Auth::id())->first();
+          if(Auth::check()){
+            $data['users_details'] = DB::table('users')->select('id','name','email','mobile')->where('id',Auth::id())->first();
+          }
+          return view('front.checkout.review_order')->with($data);
+        }
+    }
+
+    public function order(Request $request){
+      $input_data=$request->all();
+      $user_mail_name="";
+      $user_mail_email="";
+      $session_id=Session::get('session_id');
+      //$i=0;
+      //$data = [];
+      $tiffin_data = [];
+      $catering_data = [];
+      $menu_data = [];
+      $tiffin_i=0;
+      $catering_i=0;
+      $menu_i=0;
+
+      $input_data=$request->all();
+      $payment_method=$input_data['payment_method'];
+      if($payment_method=="POP"){   // Pay and Pickup
+        $order_status = "Accepted";
+        $amount_received = "No";
+      }else{   // Paypal
+        $order_status = "Accepted";
+        $amount_received = "Yes";
+      }
+
+      //check which type of root category available in the cart.
+      $tiffin_found=0;
+      $catering_found=0;
+      $menu_found=0;
+      $cart_datas=Cart::where('session_id',$session_id)->get();
+      foreach ($cart_datas as $cart_data){
+        $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+        // tiffin
+        if($getrootcategoryid==1){$tiffin_found=1;}
+        // catering
+        if($getrootcategoryid==2){$catering_found=1;}
+        // menu
+        if($getrootcategoryid==3){$menu_found=1;}
+      }
+
+
+      // Order Logic
+      if($payment_method=="POP"){ // POP
+          if(Auth::check()){
+            $user_mail_name = Auth::user()->name;
+            $user_mail_email = Auth::user()->email;
+            $input_data=$request->all();
+            $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+            $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+            $input_data['order_status']= $order_status;
+            $input_data['amount_received']= $amount_received;
+            // if tiffin category found
+            if($tiffin_found==1){
+                $tiffin_order_id="";
+                $tiffin_i=0;
+                $input_data['main_categories_id']=1;
+                $grand_total=0;
+                foreach ($cart_datas as $cart_data){
+                  $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                  if($getrootcategoryid==1){
+                    $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                  }
+                }
+                $input_data['grand_total']=$grand_total;
+                $order = Order::create($input_data);
+                $tiffin_order_id = $order->id;
+                $cart_datas=Cart::where('session_id',$session_id)->get();
+                foreach ($cart_datas as $cart_data){
+                  $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                  if($getrootcategoryid==1){
+                      $tiffin_data['items'][$tiffin_i]['name'] = $cart_data->product_name;
+                      $tiffin_data['items'][$tiffin_i]['price'] = $cart_data->price;
+                      $tiffin_data['items'][$tiffin_i]['desc'] = $cart_data->product_code;
+                      $tiffin_data['items'][$tiffin_i]['qty'] = $cart_data->quantity;
+
+                      $orderproduct = new Orderproduct;
+                      $orderproduct->order_id = $tiffin_order_id;
+                      $orderproduct->p_id = $cart_data->products_id;
+                      $orderproduct->p_code = $cart_data->product_code;
+                      $orderproduct->p_name = $cart_data->product_name;
+                      $orderproduct->p_price = $cart_data->price;
+                      $orderproduct->p_qty = $cart_data->quantity;
+                      $orderproduct->save();
+                      Cart::where('id', $cart_data->id)->forceDelete();
+                      $tiffin_i++;
+                  }
+                }
+            }
+            // if catering category found
+            if($catering_found==1){
+                $catering_order_id="";
+                $catering_i=0;
+                $input_data['main_categories_id']=2;
+                $grand_total=0;
+                foreach ($cart_datas as $cart_data){
+                  $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                  if($getrootcategoryid==2){
+                    $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                  }
+                }
+                $input_data['grand_total']=$grand_total;
+                $order = Order::create($input_data);
+                $catering_order_id = $order->id;
+                $cart_datas=Cart::where('session_id',$session_id)->get();
+                foreach ($cart_datas as $cart_data){
+                  $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                  if($getrootcategoryid==2){
+                      $catering_data['items'][$catering_i]['name'] = $cart_data->product_name;
+                      $catering_data['items'][$catering_i]['price'] = $cart_data->price;
+                      $catering_data['items'][$catering_i]['desc'] = $cart_data->product_code;
+                      $catering_data['items'][$catering_i]['qty'] = $cart_data->quantity;
+
+                      $orderproduct = new Orderproduct;
+                      $orderproduct->order_id = $catering_order_id;
+                      $orderproduct->p_id = $cart_data->products_id;
+                      $orderproduct->p_code = $cart_data->product_code;
+                      $orderproduct->p_name = $cart_data->product_name;
+                      $orderproduct->p_price = $cart_data->price;
+                      $orderproduct->p_qty = $cart_data->quantity;
+                      $orderproduct->save();
+                      Cart::where('id', $cart_data->id)->forceDelete();
+                      $catering_i++;
+                  }
+                }
+            }
+            // if menu category found
+            if($menu_found==1){
+                $menu_order_id="";
+                $menu_i=0;
+                $input_data['main_categories_id']=3;
+                $grand_total=0;
+                foreach ($cart_datas as $cart_data){
+                  $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                  if($getrootcategoryid==3){
+                    $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                  }
+                }
+                $input_data['grand_total']=$grand_total;
+                $order = Order::create($input_data);
+                $menu_order_id = $order->id;
+                $cart_datas=Cart::where('session_id',$session_id)->get();
+                foreach ($cart_datas as $cart_data){
+                  $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                  if($getrootcategoryid==3){
+                      $menu_data['items'][$menu_i]['name'] = $cart_data->product_name;
+                      $menu_data['items'][$menu_i]['price'] = $cart_data->price;
+                      $menu_data['items'][$menu_i]['desc'] = $cart_data->product_code;
+                      $menu_data['items'][$menu_i]['qty'] = $cart_data->quantity;
+
+                      $orderproduct = new Orderproduct;
+                      $orderproduct->order_id = $menu_order_id;
+                      $orderproduct->p_id = $cart_data->products_id;
+                      $orderproduct->p_code = $cart_data->product_code;
+                      $orderproduct->p_name = $cart_data->product_name;
+                      $orderproduct->p_price = $cart_data->price;
+                      $orderproduct->p_qty = $cart_data->quantity;
+                      $orderproduct->save();
+                      Cart::where('id', $cart_data->id)->forceDelete();
+                      $menu_i++;
+                  }
+                }
+            }
+          }else{
+            $input_data=$request->all();
+            if(isset($input_data['creataccount'])){
+              $userdata = DB::table('users')->where('email',$input_data['users_email'])->first();
+              if($userdata==null){
+                // user create
+                $user = new User;
+                $user->role_id=5;
+                $user->name=$input_data['name'];
+                $user->email=$input_data['users_email'];
+                $user->mobile=$input_data['mobile'];
+                $user->is_active=1;
+                $user->password=bcrypt($input_data['password']);
+                $user->save();
+                $user_mail_name = $input_data['name'];
+                $user_mail_email = $input_data['users_email'];
+                if(Auth::attempt(['email'=>$input_data['users_email'],'password'=>$input_data['password']])){
+                    Session::put('frontSession',$input_data['users_email']);
+                }
+                // mail trigger for user creation
+                $input_data['users_id']=$user->id;
+                $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+                $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+                $input_data['order_status']= $order_status;
+                $input_data['amount_received']= $amount_received;
+                // if tiffin category found
+                if($tiffin_found==1){
+                    $tiffin_order_id="";
+                    $tiffin_i=0;
+                    $input_data['main_categories_id']=1;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $tiffin_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                          $tiffin_data['items'][$tiffin_i]['name'] = $cart_data->product_name;
+                          $tiffin_data['items'][$tiffin_i]['price'] = $cart_data->price;
+                          $tiffin_data['items'][$tiffin_i]['desc'] = $cart_data->product_code;
+                          $tiffin_data['items'][$tiffin_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $tiffin_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $tiffin_i++;
+                      }
+                    }
+                }
+                // if catering category found
+                if($catering_found==1){
+                    $catering_order_id="";
+                    $catering_i=0;
+                    $input_data['main_categories_id']=2;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $catering_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                          $catering_data['items'][$catering_i]['name'] = $cart_data->product_name;
+                          $catering_data['items'][$catering_i]['price'] = $cart_data->price;
+                          $catering_data['items'][$catering_i]['desc'] = $cart_data->product_code;
+                          $catering_data['items'][$catering_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $catering_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $catering_i++;
+                      }
+                    }
+                }
+                // if menu category found
+                if($menu_found==1){
+                    $menu_order_id="";
+                    $menu_i=0;
+                    $input_data['main_categories_id']=3;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $menu_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                          $menu_data['items'][$menu_i]['name'] = $cart_data->product_name;
+                          $menu_data['items'][$menu_i]['price'] = $cart_data->price;
+                          $menu_data['items'][$menu_i]['desc'] = $cart_data->product_code;
+                          $menu_data['items'][$menu_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $menu_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $menu_i++;
+                      }
+                    }
+                }
+              }else{
+                $user_mail_name = $input_data['name'];
+                $user_mail_email = $input_data['users_email'];
+                //if(Auth::attempt(['email'=>$input_data['users_email'],'password'=>$input_data['password']])){
+                  Session::put('frontSession',$input_data['users_email']);
+                //}
+                $input_data['users_id']=$userdata->id;
+                $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+                $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+                $input_data['order_status']= $order_status;
+                $input_data['amount_received']= $amount_received;
+                // if tiffin category found
+                if($tiffin_found==1){
+                    $tiffin_order_id="";
+                    $tiffin_i=0;
+                    $input_data['main_categories_id']=1;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $tiffin_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                          $tiffin_data['items'][$tiffin_i]['name'] = $cart_data->product_name;
+                          $tiffin_data['items'][$tiffin_i]['price'] = $cart_data->price;
+                          $tiffin_data['items'][$tiffin_i]['desc'] = $cart_data->product_code;
+                          $tiffin_data['items'][$tiffin_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $tiffin_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $tiffin_i++;
+                      }
+                    }
+                }
+                // if catering category found
+                if($catering_found==1){
+                    $catering_order_id="";
+                    $catering_i=0;
+                    $input_data['main_categories_id']=2;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $catering_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                          $catering_data['items'][$catering_i]['name'] = $cart_data->product_name;
+                          $catering_data['items'][$catering_i]['price'] = $cart_data->price;
+                          $catering_data['items'][$catering_i]['desc'] = $cart_data->product_code;
+                          $catering_data['items'][$catering_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $catering_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $catering_i++;
+                      }
+                    }
+                }
+                // if menu category found
+                if($menu_found==1){
+                    $menu_order_id="";
+                    $menu_i=0;
+                    $input_data['main_categories_id']=3;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $menu_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                          $menu_data['items'][$menu_i]['name'] = $cart_data->product_name;
+                          $menu_data['items'][$menu_i]['price'] = $cart_data->price;
+                          $menu_data['items'][$menu_i]['desc'] = $cart_data->product_code;
+                          $menu_data['items'][$menu_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $menu_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $menu_i++;
+                      }
+                    }
+                }
+              }
+            }else{
+              $user_mail_name = $input_data['name'];
+              $user_mail_email = $input_data['users_email'];
+              $userdata = DB::table('users')->where('email',$input_data['users_email'])->first();
+              if($userdata==null){
+                $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+                $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+                $input_data['order_status']= $order_status;
+                $input_data['amount_received']= $amount_received;
+                // if tiffin category found
+                if($tiffin_found==1){
+                    $tiffin_order_id="";
+                    $tiffin_i=0;
+                    $input_data['main_categories_id']=1;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $tiffin_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                          $tiffin_data['items'][$tiffin_i]['name'] = $cart_data->product_name;
+                          $tiffin_data['items'][$tiffin_i]['price'] = $cart_data->price;
+                          $tiffin_data['items'][$tiffin_i]['desc'] = $cart_data->product_code;
+                          $tiffin_data['items'][$tiffin_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $tiffin_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $tiffin_i++;
+                      }
+                    }
+                }
+                // if catering category found
+                if($catering_found==1){
+                    $catering_order_id="";
+                    $catering_i=0;
+                    $input_data['main_categories_id']=2;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $catering_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                          $catering_data['items'][$catering_i]['name'] = $cart_data->product_name;
+                          $catering_data['items'][$catering_i]['price'] = $cart_data->price;
+                          $catering_data['items'][$catering_i]['desc'] = $cart_data->product_code;
+                          $catering_data['items'][$catering_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $catering_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $catering_i++;
+                      }
+                    }
+                }
+                // if menu category found
+                if($menu_found==1){
+                    $menu_order_id="";
+                    $menu_i=0;
+                    $input_data['main_categories_id']=3;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $menu_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                          $menu_data['items'][$menu_i]['name'] = $cart_data->product_name;
+                          $menu_data['items'][$menu_i]['price'] = $cart_data->price;
+                          $menu_data['items'][$menu_i]['desc'] = $cart_data->product_code;
+                          $menu_data['items'][$menu_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $menu_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $menu_i++;
+                      }
+                    }
+                }
+              }else{
+                $input_data['users_id']=$userdata->id;
+                $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+                $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+                $input_data['order_status']= $order_status;
+                $input_data['amount_received']= $amount_received;
+                // if tiffin category found
+                if($tiffin_found==1){
+                    $tiffin_order_id="";
+                    $tiffin_i=0;
+                    $input_data['main_categories_id']=1;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $tiffin_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==1){
+                          $tiffin_data['items'][$tiffin_i]['name'] = $cart_data->product_name;
+                          $tiffin_data['items'][$tiffin_i]['price'] = $cart_data->price;
+                          $tiffin_data['items'][$tiffin_i]['desc'] = $cart_data->product_code;
+                          $tiffin_data['items'][$tiffin_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $tiffin_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $tiffin_i++;
+                      }
+                    }
+                }
+                // if catering category found
+                if($catering_found==1){
+                    $catering_order_id="";
+                    $catering_i=0;
+                    $input_data['main_categories_id']=2;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $catering_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==2){
+                          $catering_data['items'][$catering_i]['name'] = $cart_data->product_name;
+                          $catering_data['items'][$catering_i]['price'] = $cart_data->price;
+                          $catering_data['items'][$catering_i]['desc'] = $cart_data->product_code;
+                          $catering_data['items'][$catering_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $catering_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $catering_i++;
+                      }
+                    }
+                }
+                // if menu category found
+                if($menu_found==1){
+                    $menu_order_id="";
+                    $menu_i=0;
+                    $input_data['main_categories_id']=3;
+                    $grand_total=0;
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                        $grand_total=$grand_total+($cart_data->price*$cart_data->quantity);
+                      }
+                    }
+                    $input_data['grand_total']=$grand_total;
+                    $order = Order::create($input_data);
+                    $menu_order_id = $order->id;
+                    $cart_datas=Cart::where('session_id',$session_id)->get();
+                    foreach ($cart_datas as $cart_data){
+                      $getrootcategoryid = getrootcategoryid($cart_data->products_id);
+                      if($getrootcategoryid==3){
+                          $menu_data['items'][$menu_i]['name'] = $cart_data->product_name;
+                          $menu_data['items'][$menu_i]['price'] = $cart_data->price;
+                          $menu_data['items'][$menu_i]['desc'] = $cart_data->product_code;
+                          $menu_data['items'][$menu_i]['qty'] = $cart_data->quantity;
+
+                          $orderproduct = new Orderproduct;
+                          $orderproduct->order_id = $menu_order_id;
+                          $orderproduct->p_id = $cart_data->products_id;
+                          $orderproduct->p_code = $cart_data->product_code;
+                          $orderproduct->p_name = $cart_data->product_name;
+                          $orderproduct->p_price = $cart_data->price;
+                          $orderproduct->p_qty = $cart_data->quantity;
+                          $orderproduct->save();
+                          Cart::where('id', $cart_data->id)->forceDelete();
+                          $menu_i++;
+                      }
+                    }
+                }
+              }
+            }
+        }
+
+        $customthemesetting = customthemesetting();
+        $mail = DB::table('theme_settings')->where('id',1)->first();
+        if ($mail){
+          $config = array(
+              'driver'     => $mail->smtp_transport_exp,
+              'host'       => $mail->smtp_server,
+              'port'       => $mail->smtp_port,
+              'from'       => array('address' => $mail->smtp_from_email, 'name' => $mail->smtp_from_name),
+              'encryption' => $mail->smtp_encryption,
+              'username'   => $mail->smtp_email,
+              'password'   => $mail->smtp_email_pass,
+              'sendmail'   => '/usr/sbin/sendmail -bs',
+              'pretend'    => false,
+          );
+          Config::set('mail', $config);
+        }
+        // User Mail
+        if($tiffin_found==1){
+          $to_name = $user_mail_name;
+          $to_email = $user_mail_email;
+          $mail_data['username'] = $user_mail_name;
+          $mail_data['order_id'] = $tiffin_order_id;
+          $mail_data['order_data'] = $tiffin_data['items'];
+          $mail_data['payment_method'] = $input_data['payment_method'];
+          $mail_data['customthemesetting'] = $customthemesetting;
+          $subject = "Prasadam - Order #".$tiffin_order_id;
+          Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+            $message->to($to_email, $to_name)->subject($subject);
+          });
+        }
+        if($catering_found==1){
+          $to_name = $user_mail_name;
+          $to_email = $user_mail_email;
+          $mail_data['username'] = $user_mail_name;
+          $mail_data['order_id'] = $catering_order_id;
+          $mail_data['order_data'] = $catering_data['items'];
+          $mail_data['payment_method'] = $input_data['payment_method'];
+          $mail_data['customthemesetting'] = $customthemesetting;
+          $subject = "Prasadam - Order #".$catering_order_id;
+          Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+            $message->to($to_email, $to_name)->subject($subject);
+          });
+        }
+        if($menu_found==1){
+          $to_name = $user_mail_name;
+          $to_email = $user_mail_email;
+          $mail_data['username'] = $user_mail_name;
+          $mail_data['order_id'] = $menu_order_id;
+          $mail_data['order_data'] = $menu_data['items'];
+          $mail_data['payment_method'] = $input_data['payment_method'];
+          $mail_data['customthemesetting'] = $customthemesetting;
+          $subject = "Prasadam - Order #".$menu_order_id;
+          Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+            $message->to($to_email, $to_name)->subject($subject);
+          });
+        }
+
+        // Admin Mail
+        if($tiffin_found==1){
+          $to_name = "Admin";
+          $to_email = $customthemesetting->front_email;
+          $mail_data['username'] = "Admin";
+          $mail_data['order_id'] = $tiffin_order_id;
+          $mail_data['customthemesetting'] = $customthemesetting;
+          $mail_data['order_data'] = $tiffin_data['items'];
+          $mail_data['payment_method'] = $input_data['payment_method'];
+          $subject = "Prasadam - Order #".$tiffin_order_id;
+          Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+            $message->to($to_email, $to_name)->subject($subject);
+          });
+        }
+        if($catering_found==1){
+          $to_name = "Admin";
+          $to_email = $customthemesetting->front_email;
+          $mail_data['username'] = "Admin";
+          $mail_data['order_id'] = $catering_order_id;
+          $mail_data['customthemesetting'] = $customthemesetting;
+          $mail_data['order_data'] = $catering_data['items'];
+          $mail_data['payment_method'] = $input_data['payment_method'];
+          $subject = "Prasadam - Order #".$catering_order_id;
+          Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+            $message->to($to_email, $to_name)->subject($subject);
+          });
+        }
+        if($menu_found==1){
+          $to_name = "Admin";
+          $to_email = $customthemesetting->front_email;
+          $mail_data['username'] = "Admin";
+          $mail_data['order_id'] = $menu_order_id;
+          $mail_data['customthemesetting'] = $customthemesetting;
+          $mail_data['order_data'] = $menu_data['items'];
+          $mail_data['payment_method'] = $input_data['payment_method'];
+          $subject = "Prasadam - Order #".$menu_order_id;
+          Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+            $message->to($to_email, $to_name)->subject($subject);
+          });
+        }
+
+      return redirect('/cod');
+      }else{ // Paypal
+
+        $order_id='1';
+        $i=0;
+        foreach ($cart_datas as $cart_data){
+          $data['items'][$i]['name'] = $cart_data->product_name;
+          $data['items'][$i]['price'] = $cart_data->price;
+          $data['items'][$i]['desc'] = $cart_data->product_code;
+          $data['items'][$i]['qty'] = $cart_data->quantity;
+          $i++;
+        }
+        $provider = new ExpressCheckout;
+        $data['invoice_id'] = $order_id;
+        $data['invoice_description'] = "Order #{$data['invoice_id']} Invoice";
+        $data['return_url'] = url('/paypal');
+        $data['cancel_url'] = url('/viewcart');
+        $total = 0;
+        foreach($data['items'] as $item) {
+            $total += $item['price']*$item['qty'];
+        }
+        $data['total'] = $total;
+        //give a discount of 10% of the order amount
+        //$data['shipping_discount'] = round((10 / 100) * $total, 2);
+        $data['shipping_discount'] = 0;
+        $response = $provider->setExpressCheckout($data);
+        return redirect($response['paypal_link']);
+        //return redirect('/paypal');
+      }
+
+
+
+      /*
+      if(Auth::check()){
+        $user_mail_name = Auth::user()->name;
+        $user_mail_email = Auth::user()->email;
+        $input_data=$request->all();
+        $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+        $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+        $input_data['order_status']= "Accepted";
+        $order = Order::create($input_data);
+        $order_id = $order->id;
+        $session_id=Session::get('session_id');
+        $cart_datas=Cart::where('session_id',$session_id)->get();
+        foreach ($cart_datas as $cart_data){
+          $data['items'][$i]['name'] = $cart_data->product_name;
+          $data['items'][$i]['price'] = $cart_data->price;
+          $data['items'][$i]['desc'] = $cart_data->product_code;
+          $data['items'][$i]['qty'] = $cart_data->quantity;
+
+          $orderproduct = new Orderproduct;
+          $orderproduct->order_id = $order_id;
+          $orderproduct->p_id = $cart_data->products_id;
+          $orderproduct->p_code = $cart_data->product_code;
+          $orderproduct->p_name = $cart_data->product_name;
+          $orderproduct->p_price = $cart_data->price;
+          $orderproduct->p_qty = $cart_data->quantity;
+          $orderproduct->save();
+          Cart::where('id', $cart_data->id)->forceDelete();
+
+          $i++;
+        }
+      }else{
+        $input_data=$request->all();
+        if(isset($input_data['creataccount'])){
+          $userdata = DB::table('users')->where('email',$input_data['users_email'])->first();
+          if($userdata==null){
+            // user create
+            $user = new User;
+            $user->role_id=5;
+            $user->name=$input_data['name'];
+            $user->email=$input_data['users_email'];
+            $user->mobile=$input_data['mobile'];
+            $user->is_active=1;
+            $user->password=bcrypt($input_data['password']);
+            $user->save();
+            $user_mail_name = $input_data['name'];
+            $user_mail_email = $input_data['users_email'];
+            if(Auth::attempt(['email'=>$input_data['users_email'],'password'=>$input_data['password']])){
+                Session::put('frontSession',$input_data['users_email']);
+            }
+            // mail trigger for user creation
+            $input_data['users_id']=$user->id;
+            $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+            $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+            $input_data['order_status']= "Accepted";
+            $order = Order::create($input_data);
+            $order_id = $order->id;
+            $session_id=Session::get('session_id');
+            $cart_datas=Cart::where('session_id',$session_id)->get();
+            foreach ($cart_datas as $cart_data){
+              $data['items'][$i]['name'] = $cart_data->product_name;
+              $data['items'][$i]['price'] = $cart_data->price;
+              $data['items'][$i]['desc'] = $cart_data->product_code;
+              $data['items'][$i]['qty'] = $cart_data->quantity;
+
+              $orderproduct = new Orderproduct;
+              $orderproduct->order_id = $order_id;
+              $orderproduct->p_id = $cart_data->products_id;
+              $orderproduct->p_code = $cart_data->product_code;
+              $orderproduct->p_name = $cart_data->product_name;
+              $orderproduct->p_price = $cart_data->price;
+              $orderproduct->p_qty = $cart_data->quantity;
+              $orderproduct->save();
+              Cart::where('id', $cart_data->id)->forceDelete();
+
+              $i++;
+            }
+          }else{
+            $user_mail_name = $input_data['name'];
+            $user_mail_email = $input_data['users_email'];
+            //if(Auth::attempt(['email'=>$input_data['users_email'],'password'=>$input_data['password']])){
+              Session::put('frontSession',$input_data['users_email']);
+            //}
+            $input_data['users_id']=$userdata->id;
+            $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+            $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+            $input_data['order_status']= "Accepted";
+            $order = Order::create($input_data);
+            $order_id = $order->id;
+            $session_id=Session::get('session_id');
+            $cart_datas=Cart::where('session_id',$session_id)->get();
+            foreach ($cart_datas as $cart_data){
+              $data['items'][$i]['name'] = $cart_data->product_name;
+              $data['items'][$i]['price'] = $cart_data->price;
+              $data['items'][$i]['desc'] = $cart_data->product_code;
+              $data['items'][$i]['qty'] = $cart_data->quantity;
+
+              $orderproduct = new Orderproduct;
+              $orderproduct->order_id = $order_id;
+              $orderproduct->p_id = $cart_data->products_id;
+              $orderproduct->p_code = $cart_data->product_code;
+              $orderproduct->p_name = $cart_data->product_name;
+              $orderproduct->p_price = $cart_data->price;
+              $orderproduct->p_qty = $cart_data->quantity;
+              $orderproduct->save();
+              Cart::where('id', $cart_data->id)->forceDelete();
+
+              $i++;
+            }
+          }
+        }else{
+          $user_mail_name = $input_data['name'];
+          $user_mail_email = $input_data['users_email'];
+          $userdata = DB::table('users')->where('email',$input_data['users_email'])->first();
+          if($userdata==null){
+            $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+            $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+            $input_data['order_status']= "Accepted";
+            $order = Order::create($input_data);
+            $order_id = $order->id;
+            $session_id=Session::get('session_id');
+            $cart_datas=Cart::where('session_id',$session_id)->get();
+            foreach ($cart_datas as $cart_data){
+              $data['items'][$i]['name'] = $cart_data->product_name;
+              $data['items'][$i]['price'] = $cart_data->price;
+              $data['items'][$i]['desc'] = $cart_data->product_code;
+              $data['items'][$i]['qty'] = $cart_data->quantity;
+
+              $orderproduct = new Orderproduct;
+              $orderproduct->order_id = $order_id;
+              $orderproduct->p_id = $cart_data->products_id;
+              $orderproduct->p_code = $cart_data->product_code;
+              $orderproduct->p_name = $cart_data->product_name;
+              $orderproduct->p_price = $cart_data->price;
+              $orderproduct->p_qty = $cart_data->quantity;
+              $orderproduct->save();
+              Cart::where('id', $cart_data->id)->forceDelete();
+
+              $i++;
+            }
+          }else{
+            $input_data['users_id']=$userdata->id;
+            $f_order_date = $input_data['delivery_date']." ".$input_data['delivery_time'];
+            $input_data['delivery_date']= Carbon::parse($f_order_date)->format('Y-m-d H:i:s');
+            $input_data['order_status']= "Accepted";
+            $order = Order::create($input_data);
+            $order_id = $order->id;
+            $session_id=Session::get('session_id');
+            $cart_datas=Cart::where('session_id',$session_id)->get();
+            foreach ($cart_datas as $cart_data){
+              $data['items'][$i]['name'] = $cart_data->product_name;
+              $data['items'][$i]['price'] = $cart_data->price;
+              $data['items'][$i]['desc'] = $cart_data->product_code;
+              $data['items'][$i]['qty'] = $cart_data->quantity;
+
+              $orderproduct = new Orderproduct;
+              $orderproduct->order_id = $order_id;
+              $orderproduct->p_id = $cart_data->products_id;
+              $orderproduct->p_code = $cart_data->product_code;
+              $orderproduct->p_name = $cart_data->product_name;
+              $orderproduct->p_price = $cart_data->price;
+              $orderproduct->p_qty = $cart_data->quantity;
+              $orderproduct->save();
+              Cart::where('id', $cart_data->id)->forceDelete();
+
+              $i++;
+            }
+          }
+        }
+      }
+
+      $customthemesetting = customthemesetting();
+      $mail = DB::table('theme_settings')->where('id',1)->first();
+      if ($mail){
+        $config = array(
+            'driver'     => $mail->smtp_transport_exp,
+            'host'       => $mail->smtp_server,
+            'port'       => $mail->smtp_port,
+            'from'       => array('address' => $mail->smtp_from_email, 'name' => $mail->smtp_from_name),
+            'encryption' => $mail->smtp_encryption,
+            'username'   => $mail->smtp_email,
+            'password'   => $mail->smtp_email_pass,
+            'sendmail'   => '/usr/sbin/sendmail -bs',
+            'pretend'    => false,
+        );
+        Config::set('mail', $config);
+      }
+      // User Mail
+      $to_name = $user_mail_name;
+      $to_email = $user_mail_email;
+      $mail_data['username'] = $user_mail_name;
+      $mail_data['order_id'] = $order_id;
+      $mail_data['order_data'] = $data['items'];
+      $mail_data['payment_method'] = $input_data['payment_method'];
+      $mail_data['customthemesetting'] = $customthemesetting;
+      $subject = "Prasadam - Order #".$order_id;
+      Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+        $message->to($to_email, $to_name)->subject($subject);
+      });
+
+      // Admin Mail
+      $to_name = "Admin";
+      $to_email = $customthemesetting->front_email;
+      $mail_data['username'] = "Admin";
+      $mail_data['order_id'] = $order_id;
+      $mail_data['customthemesetting'] = $customthemesetting;
+      $mail_data['order_data'] = $data['items'];
+      $mail_data['payment_method'] = $input_data['payment_method'];
+      $subject = "Prasadam - Order #".$order_id;
+      Mail::send('admin.mail.orderpending', $mail_data, function($message) use ($to_name, $to_email, $subject) {
+        $message->to($to_email, $to_name)->subject($subject);
+      });
+
+
+      $payment_method=$input_data['payment_method'];
+      if($payment_method=="POP"){
+          return redirect('/cod');
+      }else{
+        $provider = new ExpressCheckout;
+        $data['invoice_id'] = $order_id;
+        $data['invoice_description'] = "Order #{$data['invoice_id']} Invoice";
+        $data['return_url'] = url('/paypal');
+        $data['cancel_url'] = url('/viewcart');
+        $total = 0;
+        foreach($data['items'] as $item) {
+            $total += $item['price']*$item['qty'];
+        }
+        $data['total'] = $total;
+        //give a discount of 10% of the order amount
+        //$data['shipping_discount'] = round((10 / 100) * $total, 2);
+        $data['shipping_discount'] = 0;
+        $response = $provider->setExpressCheckout($data);
+        return redirect($response['paypal_link']);
+        //return redirect('/paypal');
+      }
+        */
+    }
+
+
+    public function cod(){
+        $data['pagetitle']="Order Success";
+        if(Auth::check()){
+          $data['user_order']=Order::where('users_id',Auth::id())->orderBy('id', 'desc')->first();
+        }else{
+          $data['user_order']=Order::orderBy('id', 'desc')->first();
+        }
+        return view('front.payment.cod')->with($data);
+    }
+
+
+    public function paypal(Request $request){
+      $data['pagetitle']="Order Success";
+      if(Auth::check()){
+        $data['user_order']=Order::where('users_id',Auth::id())->orderBy('id', 'desc')->first();
+      }else{
+        $data['user_order']=Order::orderBy('id', 'desc')->first();
+      }
+      $order_update = Order::findOrFail($data['user_order']->id);
+      $order_update->payer_id = $_GET['PayerID'];
+      $order_update->token = $_GET['token'];
+      $order_update->save();
+      return view('front.payment.paypal')->with($data);
+    }
+}
