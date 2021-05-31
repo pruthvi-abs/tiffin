@@ -9,7 +9,7 @@
                         </a>
                     </div>
                 </div>
-                <div class="col-md-5">
+                <div class="col-md-6">
                     <!-- Navigation -->
                     <nav class="module module-navigation left mr-4">
                         <ul id="nav-main" class="nav nav-main">
@@ -42,10 +42,11 @@
                             */
                             ?>
                             <li><a href="{{ url('/contact') }}">Contact</a></li>
+                            <li><a href="{{ url('/career') }}">Career</a></li>
                         </ul>
                     </nav>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                   <div class="headercart">
                     <a href="{{url('/viewcart')}}" class="module module-cart">
                       <?php

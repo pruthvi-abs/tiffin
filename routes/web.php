@@ -56,6 +56,16 @@ Route::get('/userlogin/{social}','Auth\LoginController@socialLogin')->where('soc
 Route::get('/userlogin/{social}/{callback}','Auth\LoginController@handleProviderCallback')->where('social', 'twitter|facebook|linkedin|google|github');
 //END Social login
 
+
+
+
+// career form  
+Route::get('/career', 'CareerController@index');
+Route::post('/getcareerinfo', 'HomeController@getcareerinfo')->name('getcareerinfo');
+
+
+
+
 ////// User Authentications ///////////
 Route::group(['middleware'=>'FrontLogin_middleware'],function (){
 Route::get('/userdashboard','UsersController@userdashboard');
