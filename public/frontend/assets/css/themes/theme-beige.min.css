@@ -477,7 +477,7 @@ padding: 20px 0;
 	display: inline-block;
 }
 #header .module.module-cart {
-	font-size: 18px;
+	font-size: 17px;
 	margin-right: 10px;
 }
 #header .headercart {
@@ -5694,9 +5694,9 @@ ul.wui-side-menu-items li .wui-side-menu-item.active {background: #ddae71;color:
 		margin-top: 20px !important;
 		margin-bottom: 20px !important;
 	}
-	.container.text-center .push-lg-2 .btn.btn-outline-primary{
+	/* .container.text-center .push-lg-2 .btn.btn-outline-primary{
 		margin-top: 15px !important;
-	}
+	} */
 }
 @media screen and (min-width: 768px) and (max-width: 1023px) {
 	/* #section-main-2-slider .custsilder .col-md-8{
